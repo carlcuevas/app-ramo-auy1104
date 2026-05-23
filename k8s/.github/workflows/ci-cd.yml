@@ -1,0 +1,81 @@
+name: CI/CD App Ramo
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ttzeta00/app-ramo-auy1104:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Deploy to K3s via SSH
+      uses: appleboy/ssh-action@v0.1.10
+      with:
+        host: ${{ secrets.K3S_HOST }}
+        username: ${{ secrets.K3S_USER }}
+        key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+        script: |
+          # Crear directorio temporal
+          mkdir -p /tmp/k8s-app-ramo
+          
+          # Crear archivos yaml en el servidor
+          cat << 'EOF' > /tmp/k8s-app-ramo/deployment.yaml
+          ${{ env.DEPLOYMENT_YAML }}
+          EOF
+          
+          cat << 'EOF' > /tmp/k8s-app-ramo/service.yaml
+          ${{ env.SERVICE_YAML }}
+          EOF
+          
+          # Aplicar manifiestos
+          sudo kubectl apply -f /tmp/k8s-app-ramo/deployment.yaml
+          sudo kubectl apply -f /tmp/k8s-app-ramo/service.yaml
+          
+          # Forzar reinicio para tomar la última imagen
+          sudo kubectl rollout restart deployment/app-ramo
+      env:
+        DEPLOYMENT_YAML: ${{ run: cat k8s/deployment.yaml }}
+        SERVICE_YAML: ${{ run: cat k8s/service.yaml }}
+
+    # Alternativa si el bloque anterior falla con variables de entorno:
+    - name: Copy manifests via SCP
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.K3S_HOST }}
+        username: ${{ secrets.K3S_USER }}
+        key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+        source: "k8s/*"
+        target: "/home/ubuntu/app-ramo-deploy"
+
+    - name: Apply Manifests
+      uses: appleboy/ssh-action@v0.1.10
+      with:
+        host: ${{ secrets.K3S_HOST }}
+        username: ${{ secrets.K3S_USER }}
+        key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+        script: |
+          sudo kubectl apply -f /home/ubuntu/app-ramo-deploy/k8s/
+          sudo kubectl rollout restart deployment/app-ramo
