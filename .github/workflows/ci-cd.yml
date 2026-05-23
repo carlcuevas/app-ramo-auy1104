@@ -1,0 +1,51 @@
+name: CI/CD App Ramo
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ttzeta00/app-ramo-auy1104:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Copy manifests via SCP
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.K3S_HOST }}
+        username: ${{ secrets.K3S_USER }}
+        key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+        source: "k8s/*"
+        target: "/home/ubuntu/app-ramo-deploy"
+
+    - name: Apply Manifests
+      uses: appleboy/ssh-action@v0.1.10
+      with:
+        host: ${{ secrets.K3S_HOST }}
+        username: ${{ secrets.K3S_USER }}
+        key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+        script: |
+          sudo kubectl apply -f /home/ubuntu/app-ramo-deploy/k8s/
+          sudo kubectl rollout restart deployment/app-ramo
